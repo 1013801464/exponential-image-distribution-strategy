@@ -99,8 +99,12 @@ func httpServer() {
 		}
 	}).Methods("GET")
 	http.Handle("/", rtr)
-	log.Println("HTTP Server started, listening :" + HTTP_PORT + "...")
-	_ = http.ListenAndServe(":"+HTTP_PORT, nil)
+	err := http.ListenAndServe(":"+HTTP_PORT, nil)
+	if err != nil {
+		log.Fatalf("Cannot start server, %v\n", err)
+	} else {
+		log.Println("HTTP Server started, listening :" + HTTP_PORT + "...")
+	}
 }
 
 // 接收其它客户端发来的blob下载请求
