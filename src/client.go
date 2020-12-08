@@ -99,11 +99,10 @@ func httpServer() {
 		}
 	}).Methods("GET")
 	http.Handle("/", rtr)
+	log.Println("HTTP Server is starting, listening :" + HTTP_PORT + "...")
 	err := http.ListenAndServe(":"+HTTP_PORT, nil)
 	if err != nil {
 		log.Fatalf("Cannot start server, %v\n", err)
-	} else {
-		log.Println("HTTP Server started, listening :" + HTTP_PORT + "...")
 	}
 }
 
