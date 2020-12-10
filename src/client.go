@@ -83,14 +83,19 @@ func httpServer() {
 		imageName := params["image"]
 		log.Printf("You are requesting %v-%v\n", imageName, fileName)
 		target := handle(imageName, fileName)
+		var err error = nil
 		if target == REGISTRY {
-			pullFromRegistry(writer, fileName, imageName)
+			err = pullFromRegistry(writer, fileName, imageName)
 		} else if target != "" {
-			pullFromClient(writer, fileName, target)
+			err = pullFromClient(writer, fileName, target)
+			if err != nil {
+				log.Println("Fallback to registry...")
+				err = pullFromRegistry(writer, fileName, imageName)
+			}
 		}
 		// 如果汇报失败要不断重复报告
 		var reportCount = 0
-		for reportCompletion(fileName, localIP, target) {
+		for reportCompletion(fileName, localIP, target, err == nil) {
 			time.Sleep(time.Second)
 			reportCount++
 			if reportCount > 10 {
@@ -184,31 +189,31 @@ func handle(image string, blob string) (ip string) {
 }
 
 // 从仓库拉取 (http), 然后调用 `download()`
-func pullFromRegistry(writer http.ResponseWriter, blob string, image string) {
+func pullFromRegistry(writer http.ResponseWriter, blob string, image string) error {
 	fullURL := fmt.Sprintf(REGISTRY_BLOB_PATH_PREFIX, image, blob)
 	log.Printf("Pulling from registry %s...\n", fullURL)
 	response, err := http.Get(fullURL)
 	if err != nil {
 		log.Printf("Failed to connect to %s, %v\n", fullURL, err)
-		return
+		return err
 	}
-	download(writer, response.Body, blob)
+	return download(writer, response.Body, blob)
 }
 
 // 从reader中读取数据并保存到本地文件, 同时向writer返回字节流
-func download(writer http.ResponseWriter, reader io.ReadCloser, blob string) {
+func download(writer http.ResponseWriter, reader io.ReadCloser, blob string) error {
 	// 1. 创建保存blob的本地文件夹
 	err := os.MkdirAll(LOCAL_BLOB_PATH_PREFIX, 0666)
 	if err != nil {
 		log.Printf("Cannot create dir %s, %v\n", LOCAL_BLOB_PATH_PREFIX, err)
-		return
+		return err
 	}
 	// 2. 创建本地文件
 	fullLocalPath := fmt.Sprintf("%s%c%s", LOCAL_BLOB_PATH_PREFIX, os.PathSeparator, blob)
 	f, err := os.OpenFile(fullLocalPath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("Cannot create file %s, %v\n", fullLocalPath, err)
-		return
+		return err
 	}
 	defer f.Close()
 	// 3. 开始从 reader 中读取流数据
@@ -228,32 +233,33 @@ func download(writer http.ResponseWriter, reader io.ReadCloser, blob string) {
 				break
 			} else {
 				log.Println("[C202] Cannot download file, ", err1)
-				return
+				return err1
 			}
 		}
 		if err2 != nil {
 			log.Println("[C203] Cannot write to local file", err2)
-			return
+			return err2
 		}
 		if err3 != nil {
 			log.Printf("[C204] Cannot send to client, %v\n", err3)
-			return
+			return err3
 		}
 	}
+	return nil
 }
 
 // 从其它客户端拉取
-func pullFromClient(writer http.ResponseWriter, blob string, ip string) {
+func pullFromClient(writer http.ResponseWriter, blob string, ip string) error {
 	if ip == localIP {
 		loadLocalFile(writer, blob)
-		return
+		return nil
 	}
 	// 1. 连接其它客户端
 	remoteIP := fmt.Sprintf("%s:%s", ip, TCP_PORT)
 	conn, err := net.Dial("tcp", remoteIP)
 	if err != nil {
-		log.Printf("Connot connect to %s, %v\n", remoteIP, err)
-		return
+		log.Printf("Cannot download from %s, %v\n", remoteIP, err)
+		return err
 	}
 	log.Printf("Connected to %s\n", remoteIP)
 	defer conn.Close()
@@ -261,10 +267,10 @@ func pullFromClient(writer http.ResponseWriter, blob string, ip string) {
 	_, err = conn.Write([]byte(blob))
 	if err != nil {
 		log.Println("Cannot send file name, ", err)
-		return
+		return err
 	}
 	// 3. 下载 & 返回文件
-	download(writer, conn, blob)
+	return download(writer, conn, blob)
 }
 
 // 从本地文件夹读取blob然后返回给writer
@@ -299,8 +305,12 @@ func loadLocalFile(writer http.ResponseWriter, blob string) {
 }
 
 // 向director汇报任务完成, 返回是否失败
-func reportCompletion(blob string, ip1, ip2 string) (failed bool) {
-	resp, err := http.Get(fmt.Sprintf("http://"+SERVER_SOCKET+"/complete/%s?ip1=%s&ip2=%s", blob, ip1, ip2))
+func reportCompletion(blob string, ip1, ip2 string, success bool) (failed bool) {
+	successStr := "0"
+	if success {
+		successStr = "1"
+	}
+	resp, err := http.Get(fmt.Sprintf("http://"+SERVER_SOCKET+"/complete/%s?ip1=%s&ip2=%s&success=%s", blob, ip1, ip2, successStr))
 	if err != nil {
 		log.Println("[C241] Cannot report completion to director, ", err)
 		return true

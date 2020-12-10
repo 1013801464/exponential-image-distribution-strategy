@@ -27,9 +27,9 @@ func httpServer() {
 	}).Methods("GET", "POST")
 	rtr.HandleFunc("/request/{image:[0-9a-zA-Z:._\\-]+}/{file:[:\\.a-zA-z0-9]+}"+urlSuffix, func(writer http.ResponseWriter, request *http.Request) {
 		params := mux.Vars(request)
-		ips := request.URL.Query()["ip"][0] // 字符串的IP
-		result := newRequest(params["file"], ips)
-		_, _ = writer.Write([]byte(result))
+		ips := request.URL.Query()["ip"][0]       // 字符串的IP
+		result := newRequest(params["file"], ips) // 计算目标IP地址
+		_, _ = writer.Write([]byte(result))       // TODO 将源IP：ips,文件名params["file"],目标ip：result，记录时间
 	}).Methods("GET")
 	rtr.HandleFunc("/complete/{file:[:.a-zA-z0-9]+}"+urlSuffix, func(writer http.ResponseWriter, request *http.Request) {
 		params := mux.Vars(request)
@@ -38,7 +38,8 @@ func httpServer() {
 		log.Println("Got", request.URL)
 		ip1s := query["ip1"][0]
 		ip2s := query["ip2"][0]
-		taskComplete(fileName, ip1s, ip2s)
+		status := query["success"][0]
+		taskComplete(fileName, ip1s, ip2s, status == "1") // TODO 保存本行的4个数据
 		_, err := writer.Write([]byte("ok"))
 		if err != nil {
 			log.Println("Cannot return ok to client,", err)
@@ -80,6 +81,7 @@ func clearFileInfos() {
 	fileInfos = make(map[string]FileInfo)
 }
 
+// 为文件名和IP地址选择一个目标IP地址
 func newRequest(fileName string, ip string) (url string) {
 	log.Printf("find a new request %v, %v\n", fileName, ip)
 	prepareForFileName(fileName)
@@ -88,8 +90,8 @@ func newRequest(fileName string, ip string) (url string) {
 	return fmt.Sprintf("%s", targetIP)
 }
 
-func taskComplete(fileName string, ip1, ip2 string) {
-	appendToArray(fileName, ip1, ip2)
+func taskComplete(fileName string, ip1, ip2 string, success bool) {
+	appendToArray(fileName, ip1, ip2, success)
 }
 
 // 提交某个IP的镜像列表
@@ -103,7 +105,7 @@ func submitImageInfo(ip string, data string) {
 }
 
 // 向资源列表添加两个IP
-func appendToArray(fileName string, ip1, ip2 string) {
+func appendToArray(fileName string, ip1, ip2 string, success bool) {
 	// 1. 锁住本函数
 	fileInfos[fileName].appendMutex.Lock()
 	defer fileInfos[fileName].appendMutex.Unlock()
@@ -113,11 +115,11 @@ func appendToArray(fileName string, ip1, ip2 string) {
 	if add1 {
 		fileInfos[fileName].resources.PushBack(ip1)
 	}
-	if add2 {
+	if add2 && success {
 		fileInfos[fileName].resources.PushBack(ip2)
 	}
 	// 3. 通知非空
-	if add1 || add2 {
+	if add1 || (add2 && success) {
 		select {
 		case <-fileInfos[fileName].request:
 			fileInfos[fileName].response <- true
